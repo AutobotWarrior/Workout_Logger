@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workout Logger</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #374151;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 90%; /* Fluid width for responsiveness */
+            margin: 0 auto;
+            padding: 1rem;
+            background-color: #ffffff;
+            border-radius: 0.75rem; /* rounded-xl */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* shadow-lg */
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: #1f2937;
+        }
+        .nav-button {
+            @apply flex-1 py-3 px-4 rounded-lg text-sm font-semibold transition-colors duration-200;
+            background-color: #e5e7eb; /* gray-200 */
+            color: #4b5563; /* gray-700 */
+        }
+        .nav-button.active {
+            background-color: #2563eb; /* blue-600 */
+            color: #ffffff;
+        }
+        .form-section {
+            display: none;
+        }
+        .form-section.active {
+            display: block;
+        }
+        .input-group {
+            @apply mb-4 p-4 border border-gray-200 rounded-lg shadow-sm;
+            background-color: #f9fafb; /* gray-50 */
+        }
+        .input-field {
+            @apply w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500;
+        }
+        .btn-primary {
+            @apply w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition-colors duration-200;
+        }
+        .btn-secondary {
+            @apply w-full py-3 px-4 bg-gray-200 text-gray-700 font-bold rounded-lg shadow-md hover:bg-gray-300 transition-colors duration-200;
+        }
+        .exercise-row {
+            @apply grid grid-cols-1 md:grid-cols-6 gap-2 mb-2;
+        }
+        .exercise-row label {
+            @apply text-sm font-medium text-gray-700;
+        }
+        .exercise-row input {
+            @apply input-field;
+        }
+        .exercise-row .col-span-full {
+            grid-column: span 6 / span 6;
+        }
+        .log-entry {
+            @apply p-4 mb-4 border border-gray-200 rounded-lg shadow-sm bg-gray-50;
+        }
+        .log-entry-header {
+            @apply flex justify-between items-center cursor-pointer font-semibold text-blue-700;
+        }
+        .log-entry-details {
+            @apply mt-2 text-sm text-gray-600;
+            display: none;
+        }
+        .log-entry-details.active {
+            display: block;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #2563eb;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin: 1rem auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            text-align: center;
+            display: none; /* Hidden by default */
+        }
+        .message-box button {
+            background-color: #2563eb;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 15px;
+        }
+    </style>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables for Firebase config and app ID
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+
+        let app;
+        let db;
+        let auth;
+        let userId;
+        let isAuthReady = false;
+
+        const workoutsCollectionPath = (uid) => `/artifacts/${appId}/users/${uid}/workouts`;
+
+        const WORKOUT_DEFINITIONS = {
+            'Workout A': [
+                { name: 'Trap Bar Deadlift', sets: 4, reps: '5-8' },
+                { name: 'Bulgarian Split Squats', sets: 3, reps: '8-12/leg' },
+                { name: 'Incline Dumbbell Press', sets: 4, reps: '8-12' },
+                { name: 'Dumbbell Rows (or Cable Rows)', sets: 3, reps: '8-12/arm' },
+                { name: 'Plank', sets: 3, reps: '30-60 sec' },
+                { name: 'Farmer\'s Walk', sets: 3, reps: '50-100 ft' }
+            ],
+            'Workout B': [
+                { name: 'Pull-ups (or Assisted/Lat Pulldowns)', sets: 4, reps: 'AMRAP' },
+                { name: 'Standing Dumbbell Overhead Press', sets: 4, reps: '8-12' },
+                { name: 'Push-ups (or Decline Push-ups/Dips)', sets: 3, reps: 'To near failure' },
+                { name: 'Single-Arm Dumbbell Row (Kneeling)', sets: 3, reps: '8-12/arm' },
+                { name: 'Face Pulls (band or cable)', sets: 3, reps: '15-20' },
+                { name: 'Bicep Curls / Tricep Pushdowns (Superset)', sets: 3, reps: '10-15' }
+            ],
+            'Workout C': [
+                { name: 'Goblet Squat (or Dumbbell Sumo)', sets: 3, reps: '10-15' },
+                { name: 'Push-up Variation', sets: 3, reps: 'To near failure' },
+                { name: 'Inverted Rows (or Machine Rows)', sets: 3, reps: '10-15' },
+                { name: 'Dumbbell Push Press (or Lighter)', sets: 3, reps: '8-12' },
+                { name: 'Romanian Deadlifts (Dumbbells)', sets: 3, reps: '10-15' },
+                { name: 'Farmer\'s Walk', sets: 3, reps: '50-100 ft' }
+            ]
+        };
+
+        const loggedWorkouts = []; // Array to store fetched workouts
+
+        // --- UI Elements ---
+        const workoutForms = {
+            'Workout A': document.getElementById('workoutAForm'),
+            'Workout B': document.getElementById('workoutBForm'),
+            'Workout C': document.getElementById('workoutCForm')
+        };
+        const viewLogSection = document.getElementById('viewLogSection');
+        const loggedWorkoutsContainer = document.getElementById('loggedWorkoutsContainer');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const messageBox = document.getElementById('messageBox');
+        const messageBoxText = document.getElementById('messageBoxText');
+        const messageBoxCloseBtn = document.getElementById('messageBoxCloseBtn');
+
+        // --- Message Box Function ---
+        function showMessageBox(message) {
+            messageBoxText.textContent = message;
+            messageBox.style.display = 'block';
+        }
+
+        messageBoxCloseBtn.addEventListener('click', () => {
+            messageBox.style.display = 'none';
+        });
+
+        // --- Initialization and Authentication ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Set today's date as default for date inputs
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0'); // Months start at 0!
+            const dd = String(today.getDate()).padStart(2, '0');
+            const formattedDate = `${yyyy}-${mm}-${dd}`;
+            document.querySelectorAll('.workout-date').forEach(input => {
+                input.value = formattedDate;
+            });
+
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        userIdDisplay.textContent = `User ID: ${userId}`;
+                        isAuthReady = true;
+                        console.log("Firebase authenticated. User ID:", userId);
+                        await fetchLoggedWorkouts(); // Fetch workouts once authenticated
+                    } else {
+                        // Sign in anonymously if no token is provided or user is not logged in
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    }
+                });
+
+                // Set initial view
+                showSection('home');
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                showMessageBox("Failed to initialize the app. Please try again later.");
+            }
+        });
+
+        // --- Navigation ---
+        document.querySelectorAll('.nav-button').forEach(button => {
+            button.addEventListener('click', () => {
+                const sectionId = button.dataset.section;
+                showSection(sectionId);
+            });
+        });
+
+        function showSection(sectionId) {
+            document.querySelectorAll('.form-section, #homeSection, #viewLogSection').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-button').forEach(button => {
+                button.classList.remove('active');
+            });
+
+            document.getElementById(sectionId).classList.add('active');
+            const correspondingNavButton = document.querySelector(`.nav-button[data-section="${sectionId}"]`);
+            if (correspondingNavButton) {
+                correspondingNavButton.classList.add('active');
+            }
+
+            if (sectionId.startsWith('workout')) {
+                const workoutType = document.getElementById(sectionId).dataset.workoutType;
+                populateWorkoutForm(workoutType);
+            } else if (sectionId === 'viewLogSection') {
+                displayLoggedWorkouts();
+            }
+        }
+
+        // --- Dynamic Form Generation ---
+        function createExerciseRow(exerciseName = '', targetSets = '', targetReps = '') {
+            const row = document.createElement('div');
+            row.className = 'exercise-row';
+            row.innerHTML = `
+                <div class="md:col-span-2">
+                    <label for="exerciseName" class="block text-sm font-medium text-gray-700">Exercise</label>
+                    <input type="text" value="${exerciseName}" placeholder="Exercise Name" class="input-field exercise-name">
+                </div>
+                <div>
+                    <label for="targetSets" class="block text-sm font-medium text-gray-700">Sets (Target)</label>
+                    <input type="text" value="${targetSets}" placeholder="e.g., 4" class="input-field target-sets">
+                </div>
+                <div>
+                    <label for="targetReps" class="block text-sm font-medium text-gray-700">Reps (Target)</label>
+                    <input type="text" value="${targetReps}" placeholder="e.g., 8-12" class="input-field target-reps">
+                </div>
+                <div class="md:col-span-full mt-2">
+                    <label class="block text-sm font-medium text-gray-700">Logged Sets (Weight / Reps)</label>
+                    <div class="sets-container flex flex-wrap gap-2">
+                        <!-- Set inputs will be added here by JS -->
+                    </div>
+                </div>
+            `;
+            const setsContainer = row.querySelector('.sets-container');
+            for (let i = 0; i < (targetSets || 4); i++) { // Default to 4 sets if not specified
+                const setInput = document.createElement('div');
+                setInput.className = 'flex gap-1 w-full sm:w-1/2 lg:w-1/4';
+                setInput.innerHTML = `
+                    <input type="text" placeholder="Set ${i + 1} Wt" class="input-field set-weight flex-1">
+                    <input type="text" placeholder="Set ${i + 1} Reps" class="input-field set-reps flex-1">
+                `;
+                setsContainer.appendChild(setInput);
+            }
+            return row;
+        }
+
+        function populateWorkoutForm(workoutType) {
+            const formContainer = workoutForms[workoutType].querySelector('.exercises-container');
+            formContainer.innerHTML = ''; // Clear previous exercises
+
+            const exercises = WORKOUT_DEFINITIONS[workoutType];
+            exercises.forEach(ex => {
+                formContainer.appendChild(createExerciseRow(ex.name, ex.sets, ex.reps));
+            });
+
+            // Add new exercise button
+            const addExerciseBtn = document.createElement('button');
+            addExerciseBtn.className = 'btn-secondary mt-4';
+            addExerciseBtn.textContent = 'Add Another Exercise';
+            addExerciseBtn.type = 'button';
+            addExerciseBtn.addEventListener('click', () => {
+                formContainer.appendChild(createExerciseRow());
+            });
+            formContainer.appendChild(addExerciseBtn);
+        }
+
+        // --- Save Workout Data ---
+        document.querySelectorAll('.workout-form').forEach(form => {
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                if (!isAuthReady) {
+                    showMessageBox("App is still loading or authentication failed. Please wait a moment and try again.");
+                    return;
+                }
+
+                loadingIndicator.style.display = 'block';
+                const workoutType = form.dataset.workoutType;
+                const date = form.querySelector('.workout-date').value;
+                const notes = form.querySelector('.workout-notes').value;
+
+                if (!date) {
+                    showMessageBox("Please enter the date for your workout.");
+                    loadingIndicator.style.display = 'none';
+                    return;
+                }
+
+                const exercisesData = [];
+                form.querySelectorAll('.exercise-row').forEach(row => {
+                    const name = row.querySelector('.exercise-name').value;
+                    const targetSets = row.querySelector('.target-sets').value;
+                    const targetReps = row.querySelector('.target-reps').value;
+                    const sets = [];
+                    row.querySelectorAll('.sets-container > div').forEach(setDiv => {
+                        const weight = setDiv.querySelector('.set-weight').value;
+                        const reps = setDiv.querySelector('.set-reps').value;
+                        if (weight || reps) { // Only add if weight or reps are entered
+                            sets.push({ weight, reps });
+                        }
+                    });
+                    if (name && sets.length > 0) { // Only add exercise if name and at least one set is logged
+                        exercisesData.push({ name, targetSets, targetReps, sets });
+                    }
+                });
+
+                if (exercisesData.length === 0) {
+                    showMessageBox("Please log at least one exercise with sets and reps.");
+                    loadingIndicator.style.display = 'none';
+                    return;
+                }
+
+                const workoutEntry = {
+                    date: date,
+                    workoutType: workoutType,
+                    exercises: exercisesData,
+                    notes: notes,
+                    timestamp: serverTimestamp() // Add a server timestamp for ordering
+                };
+
+                try {
+                    await addDoc(collection(db, workoutsCollectionPath(userId)), workoutEntry);
+                    showMessageBox("Workout saved successfully!");
+                    form.reset(); // Clear the form
+                    populateWorkoutForm(workoutType); // Re-populate with default exercises
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    showMessageBox("Error saving workout. Please try again.");
+                } finally {
+                    loadingIndicator.style.display = 'none';
+                }
+            });
+        });
+
+        // --- Fetch and Display Logged Workouts ---
+        async function fetchLoggedWorkouts() {
+            if (!isAuthReady) {
+                console.warn("Firestore not ready, cannot fetch workouts.");
+                return;
+            }
+            loadingIndicator.style.display = 'block';
+            try {
+                // Clear previous listener if any
+                if (window.unsubscribeWorkouts) {
+                    window.unsubscribeWorkouts();
+                }
+
+                const q = query(collection(db, workoutsCollectionPath(userId)), orderBy('timestamp', 'desc'));
+                window.unsubscribeWorkouts = onSnapshot(q, (snapshot) => {
+                    loggedWorkouts.length = 0; // Clear existing data
+                    snapshot.forEach((doc) => {
+                        loggedWorkouts.push({ id: doc.id, ...doc.data() });
+                    });
+                    displayLoggedWorkouts(); // Re-render the log whenever data changes
+                    loadingIndicator.style.display = 'none';
+                }, (error) => {
+                    console.error("Error fetching documents: ", error);
+                    showMessageBox("Error loading past workouts.");
+                    loadingIndicator.style.display = 'none';
+                });
+            } catch (error) {
+                console.error("Error setting up workout listener:", error);
+                showMessageBox("Error setting up workout listener.");
+                loadingIndicator.style.display = 'none';
+            }
+        }
+
+        function displayLoggedWorkouts() {
+            loggedWorkoutsContainer.innerHTML = ''; // Clear previous display
+            if (loggedWorkouts.length === 0) {
+                loggedWorkoutsContainer.innerHTML = '<p class="text-center text-gray-500">No workouts logged yet.</p>';
+                return;
+            }
+
+            loggedWorkouts.forEach(workout => {
+                const workoutDate = workout.date || 'N/A';
+                const workoutType = workout.workoutType || 'N/A';
+                const workoutNotes = workout.notes || 'No notes.';
+
+                const entryDiv = document.createElement('div');
+                entryDiv.className = 'log-entry';
+                entryDiv.innerHTML = `
+                    <div class="log-entry-header">
+                        <span>${workoutDate} - ${workoutType}</span>
+                        <span class="toggle-icon">+</span>
+                    </div>
+                    <div class="log-entry-details">
+                        <p class="font-semibold mt-2">Notes:</p>
+                        <p>${workoutNotes}</p>
+                        <p class="font-semibold mt-2">Exercises:</p>
+                        <ul class="list-disc pl-5">
+                            ${workout.exercises.map(ex => `
+                                <li>
+                                    <strong>${ex.name}</strong> (Target: ${ex.targetSets} sets of ${ex.targetReps})
+                                    <ul class="list-none pl-4 text-gray-500">
+                                        ${ex.sets.map((set, i) => `
+                                            <li>Set ${i + 1}: ${set.weight ? set.weight + ' lbs' : 'N/A'} x ${set.reps ? set.reps + ' reps' : 'N/A'}</li>
+                                        `).join('')}
+                                    </ul>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                `;
+                loggedWorkoutsContainer.appendChild(entryDiv);
+
+                // Add toggle functionality
+                entryDiv.querySelector('.log-entry-header').addEventListener('click', () => {
+                    const details = entryDiv.querySelector('.log-entry-details');
+                    const icon = entryDiv.querySelector('.toggle-icon');
+                    details.classList.toggle('active');
+                    icon.textContent = details.classList.contains('active') ? '-' : '+';
+                });
+            });
+        }
+    </script>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="container">
+        <h1 class="text-3xl font-bold header">Workout Logger</h1>
+        <p id="userIdDisplay" class="text-center text-sm text-gray-600 mb-4"></p>
+
+        <div class="flex space-x-2 mb-6">
+            <button class="nav-button active" data-section="homeSection">Home</button>
+            <button class="nav-button" data-section="workoutAForm">Log A</button>
+            <button class="nav-button" data-section="workoutBForm">Log B</button>
+            <button class="nav-button" data-section="workoutCForm">Log C</button>
+            <button class="nav-button" data-section="viewLogSection">View Log</button>
+        </div>
+
+        <div id="loadingIndicator" class="loading-spinner hidden"></div>
+
+        <!-- Home Section -->
+        <div id="homeSection" class="form-section active p-4 text-center">
+            <h2 class="text-2xl font-semibold mb-4">Welcome to Your Workout Logger!</h2>
+            <p class="text-gray-700 mb-4">Select a workout type above to log your session, or view your past workouts.</p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button class="btn-primary" data-section="workoutAForm">Start Workout A</button>
+                <button class="btn-primary" data-section="workoutBForm">Start Workout B</button>
+                <button class="btn-primary" data-section="workoutCForm">Start Workout C</button>
+            </div>
+            <button class="btn-secondary mt-4" data-section="viewLogSection">View All Logged Workouts</button>
+        </div>
+
+        <!-- Workout A Form -->
+        <div id="workoutAForm" class="form-section workout-form" data-workout-type="Workout A">
+            <h2 class="text-2xl font-semibold mb-4">Log Workout A</h2>
+            <div class="input-group">
+                <label for="dateA" class="block text-sm font-medium text-gray-700">Date</label>
+                <input type="date" id="dateA" class="input-field workout-date" required>
+            </div>
+            <div class="exercises-container">
+                <!-- Exercise rows will be dynamically added here -->
+            </div>
+            <div class="input-group mt-4">
+                <label for="notesA" class="block text-sm font-medium text-gray-700">Notes</label>
+                <textarea id="notesA" rows="3" placeholder="How did this workout feel? Any personal records?" class="input-field workout-notes"></textarea>
+            </div>
+            <button type="submit" class="btn-primary mt-4">Save Workout A</button>
+        </div>
+
+        <!-- Workout B Form -->
+        <div id="workoutBForm" class="form-section workout-form" data-workout-type="Workout B">
+            <h2 class="text-2xl font-semibold mb-4">Log Workout B</h2>
+            <div class="input-group">
+                <label for="dateB" class="block text-sm font-medium text-gray-700">Date</label>
+                <input type="date" id="dateB" class="input-field workout-date" required>
+            </div>
+            <div class="exercises-container">
+                <!-- Exercise rows will be dynamically added here -->
+            </div>
+            <div class="input-group mt-4">
+                <label for="notesB" class="block text-sm font-medium text-gray-700">Notes</label>
+                <textarea id="notesB" rows="3" placeholder="How did this workout feel? Any personal records?" class="input-field workout-notes"></textarea>
+            </div>
+            <button type="submit" class="btn-primary mt-4">Save Workout B</button>
+        </div>
+
+        <!-- Workout C Form -->
+        <div id="workoutCForm" class="form-section workout-form" data-workout-type="Workout C">
+            <h2 class="text-2xl font-semibold mb-4">Log Workout C</h2>
+            <div class="input-group">
+                <label for="dateC" class="block text-sm font-medium text-gray-700">Date</label>
+                <input type="date" id="dateC" class="input-field workout-date" required>
+            </div>
+            <div class="exercises-container">
+                <!-- Exercise rows will be dynamically added here -->
+            </div>
+            <div class="input-group mt-4">
+                <label for="notesC" class="block text-sm font-medium text-gray-700">Notes</label>
+                <textarea id="notesC" rows="3" placeholder="How did this workout feel? Any personal records?" class="input-field workout-notes"></textarea>
+            </div>
+            <button type="submit" class="btn-primary mt-4">Save Workout C</button>
+        </div>
+
+        <!-- View Log Section -->
+        <div id="viewLogSection" class="form-section">
+            <h2 class="text-2xl font-semibold mb-4">Your Workout History</h2>
+            <div id="loggedWorkoutsContainer" class="space-y-4">
+                <!-- Logged workouts will be displayed here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Message Box -->
+    <div id="messageBox" class="message-box">
+        <p id="messageBoxText"></p>
+        <button id="messageBoxCloseBtn">OK</button>
+    </div>
+</body>
+</html>
